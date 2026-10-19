@@ -18,6 +18,11 @@ class SlotAssigner
      */
     public function assignPending(): int
     {
+        // Pemeriksaan murah dulu: kalau tidak ada yang menunggu, tidak perlu mengunci apa pun
+        if (! $this->adaYangMenunggu()) {
+            return 0;
+        }
+
         $assigned = 0;
 
         // Batas 100 putaran sebagai pengaman agar tidak pernah berputar tanpa henti
@@ -33,11 +38,41 @@ class SlotAssigner
     }
 
     /**
+     * Sama seperti assignPending, tapi tidak pernah melempar error:
+     * kegagalan hanya dicatat di log, sehingga permintaan yang memanggilnya tetap berhasil.
+     */
+    public function assignPendingSafely(): int
+    {
+        try {
+            return $this->assignPending();
+        } catch (\Throwable $e) {
+            report($e);
+
+            return 0;
+        }
+    }
+
+    /**
+     * Batas waktu jendela: reservasi dengan jam datang sebelum batas ini sudah boleh dapat box.
+     */
+    private function batasJendela(): \Illuminate\Support\Carbon
+    {
+        return now()->addHours((int) config('parking.assign_hours_before'));
+    }
+
+    private function adaYangMenunggu(): bool
+    {
+        return Reservation::whereNull('slot_id')
+            ->where('arrival_time', '<=', $this->batasJendela())
+            ->exists();
+    }
+
+    /**
      * Pilihkan satu box untuk satu reservasi. Mengembalikan false kalau tidak ada yang bisa dikerjakan.
      */
     private function assignNext(): bool
     {
-        $limit = now()->addHours((int) config('parking.assign_hours_before'));
+        $limit = $this->batasJendela();
 
         return DB::transaction(function () use ($limit) {
             // Box kosong yang belum dipegang reservasi, kode terkecil lebih dulu (P01, P02, ...)
